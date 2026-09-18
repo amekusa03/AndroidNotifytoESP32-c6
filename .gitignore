@@ -1,0 +1,61 @@
+# Android / Gradle
+*.iml
+.gradle
+/local.properties
+/.idea/
+.DS_Store
+/build
+/captures
+.externalNativeBuild
+.cxx
+local.properties
+.artifacts/
+
+# ESP32 / ESP32-c6
+ESP32/build/
+ESP32/managed_components/
+ESP32/dependencies.lock
+ESP32/sdkconfig
+ESP32/main/wifi_settings.h
+ESP32/main/wifi_creds.h
+ESP32/.venv/
+ESP32/__pycache__/
+ESP32/components/
+
+ESP32-c6/build/
+ESP32-c6/managed_components/
+ESP32-c6/dependencies.lock
+ESP32-c6/sdkconfig
+ESP32-c6/sdkconfig.old
+ESP32-c6/main/wifi_settings.h
+ESP32-c6/main/wifi_creds.h
+ESP32-c6/.cache/
+ESP32-c6/__pycache__/
+ESP32-c6/components/
+
+# Credentials / Secrets
+wifi_creds.h
+wifi_settings.h
+*.env
+.env.*
+
+# Build artifacts
+build/
+sdkconfig
+sdkconfig.old
+managed_components/
+dependencies.lock
+
+# Python
+__pycache__/
+*.py[cod]
+*.venv/
+
+# Linux
+Linux/build/
+Linux/*_autogen/
+Linux/CMakeCache.txt
+Linux/CMakeFiles/
+Linux/Makefile
+Linux/cmake_install.cmake
+Linux/compile_commands.json
