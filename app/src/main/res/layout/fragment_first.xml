@@ -93,10 +93,21 @@
             android:layout_height="wrap_content"
             android:layout_marginTop="16dp"
             android:text="Open Notification Access Settings"
-            app:layout_constraintBottom_toTopOf="@id/textView_history_title"
+            app:layout_constraintBottom_toTopOf="@id/button_test_send"
             app:layout_constraintEnd_toEndOf="parent"
             app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@id/editText_duration" />
+
+        <Button
+            android:id="@+id/button_test_send"
+            android:layout_width="wrap_content"
+            android:layout_height="wrap_content"
+            android:layout_marginTop="8dp"
+            android:text="📡 Test Send"
+            app:layout_constraintBottom_toTopOf="@id/textView_history_title"
+            app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintStart_toStartOf="parent"
+            app:layout_constraintTop_toBottomOf="@id/button_settings" />
 
         <TextView
             android:id="@+id/textView_history_title"

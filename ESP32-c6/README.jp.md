@@ -37,6 +37,21 @@ Google Home / Nest Hub / Apple Home 等の標準スマートホームエコシ�
 - **接続方式**: USB Type-A ドングル（PC の USB ポートに直結）
 - **物理配線**: なし（USB 給電および接続検知）
 - **物理ボタン**: GPIO 9 (BOOT ボタン短押しで画面 ON/OFF / 長押し 3 秒以上で Factory Reset)
+- **非常停止ボタン**: GPIO 8 (B接点 NC、押下で HIGH → PC へ緊急停止トークン送信)
+
+### GPIO ピン割り当て
+
+| GPIO | 信号名 | 方向 | 用途 |
+|:---:|---|:---:|---|
+| 1 | `LCD_PIN_SCLK` | OUT | SPI クロック (ST7789) |
+| 2 | `LCD_PIN_MOSI` | OUT | SPI データ (ST7789) |
+| 3 | `LCD_PIN_DC` | OUT | データ / コマンド選択 (ST7789) |
+| 4 | `LCD_PIN_RST` | OUT | ハードウェアリセット (ST7789) |
+| 5 | `LCD_PIN_CS` | OUT | チップセレクト (ST7789) |
+| 6 | `LCD_PIN_BL` | OUT | バックライト制御（HIGH = 点灯） |
+| **7** | **`GPIO_NOTIFY_LED`** | **OUT** | **通知 LED 出力（通知画像表示中 HIGH、通常時 LOW）** |
+| **8** | **`GPIO_EMERGENCY_STOP`** | **IN** | **非常停止ボタン（B接点 / 内部プルアップ、GND接続、押下で HIGH）** |
+| 9 | `GPIO_BOOT_BUTTON` | IN | BOOT ボタン（内部プルアップ、押下で LOW）|
 
 ---
 
@@ -75,11 +90,8 @@ Google Home / Nest Hub / Apple Home 等の標準スマートホームエコシ�
 // PC 制御用ポート & トークン設定
 #define PC_CONTROL_PORT              7777
 #define PC_CONTROL_TOKEN_SHUTDOWN    "secure_pc_shutdown_token_12345"
-#define PC_CONTROL_TOKEN_VOLUME_UP   "secure_pc_vol_up_token_12345"
-#define PC_CONTROL_TOKEN_VOLUME_DOWN "secure_pc_vol_down_token_12345"
-#define PC_CONTROL_TOKEN_VOLUME_MUTE "secure_pc_vol_mute_token_12345"
-#define PC_CONTROL_TOKEN_VOLUME_GET  "secure_pc_vol_get_token_12345"
-#define PC_CONTROL_TOKEN_VOLUME_SET  "secure_pc_vol_set_token_12345"
+#define PC_CONTROL_TOKEN_EMERGENCY_STOP    "secure_pc_emergency_stop_token_12345"
+#define PC_CONTROL_TOKEN_EMERGENCY_RELEASE "secure_pc_emergency_release_token_12345"
 ```
 
 ---
@@ -142,12 +154,7 @@ idf.py -p /dev/ttyACM0 flash monitor
    - `PC_CONTROL_TOKEN_SHUTDOWN`（シャットダウントークン）を送信。
    - PC 側の常駐プログラム（デーモン）がトークンを認証し、`sudo shutdown -h now` を執行。
 
-3. **音量調整操作 (Matter -> PC)**
-   - Google Home 等から LevelControl（0〜254）操作を受信。
-   - 0〜254 のレベル値を 0〜100% の音量パーセンテージに変換。
-   - ESP32-C6 から PC の `PC_CONTROL_PORT` 宛てに指定音量設定トークン（`PC_CONTROL_TOKEN_VOLUME_SET:<0〜100>`）を送信し、PC 側の `pactl set-sink-volume` コマンドでシステム音量をリアルタイム制御。
-
-4. **PC 状態監視 & LCD 制御 (USB Status -> Matter / LCD)**
+3. **PC 状態監視 & LCD 制御 (USB Status -> Matter / LCD)**
    - 2秒周期で USB Serial/JTAG 接続状態を監視。
    - 接続あり ➔ `PC: ON`（LCD 表示更新）
    - 接続なし ➔ `PC: OFF`（LCD 表示更新）
@@ -157,9 +164,23 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ---
 
+4. **非常停止ボタン入力 & 解除 (GPIO 8 → PC)**
+   - **配線**: `GPIO 8` ─── [B接点 (NC) 非常停止SW] ─── `GND`
+   - **通常時 (非押下)**: GND と導通しているため、GPIO 8 = LOW。
+   - **押下時 (停止作動)**: スイッチが開放され内部プルアップにより GPIO 8 = HIGH（立ち上がりエッジ検出）。
+     - ESP32-C6 が `PC_CONTROL_TOKEN_EMERGENCY_STOP` を PC 宛 TCP で非同期送信。
+     - LCD に `EMRG STOP!` を表示。
+   - **解除時 (復帰作動)**: ボタン解除で GND と再導通し GPIO 8 = LOW（立ち下がりエッジ検出）。
+     - ESP32-C6 が `PC_CONTROL_TOKEN_EMERGENCY_RELEASE` を PC 宛 TCP で非同期送信。
+     - LCD に `EMRG Released` を表示。
+   - 100ms の安定検出（デバウンス処理）により、スイッチのチャタリング誤動作を抑止。
+   - ※ フェールセーフ設計: ケーブル抜けや断線時も回路が開放されて HIGH となり、安全に非常停止が作動します。
+
+---
+
 ## 🐧 Ubuntu 側の常駐プログラム（デーモン）設定
 
-ESP32 からの要求（TCP トークン）を待ち受け、PC のシャットダウンや音量調整（`pactl`）を行うための常駐デーモンを systemd を使用して設定します。
+ESP32 からの要求（TCP トークン）を待ち受け、PC のシャットダウンや非常停止イベント（停止・解除）の受信を行うための常駐デーモンを systemd を使用して設定します。
 
 ### 1. デーモンスクリプトの確認・パーミッション設定
 
@@ -355,6 +376,7 @@ print("✓ 通知を送信しました!")
 - **自動点灯**: LCD バックライトが消灯（スリープ）している状態で通知パケットを受信すると、自動的にバックライトが点灯して通知を表示します。
 - **自動復帰**: 指定した秒数（デフォルト 10 秒）が経過すると、自動的にメインのステータス画面（時計・Wi-Fi/PC状態）に戻ります（元が消灯状態だった場合は再び消灯します）。
 - **手動閉じる**: 本体側面の BOOT ボタン（GPIO 9）を短押しすることで、表示秒数の経過を待たずに即時通知を閉じてメイン画面に戻すことができます。
+- **通知 LED 連動 (GPIO 7)**: 通知画像を表示している間は GPIO 7 が HIGH に設定されます。通常のステータス画面に戻った時点で LOW に復帰します。ライトスリープ中も `gpio_hold` により状態が保持されます。
 
 ---
 

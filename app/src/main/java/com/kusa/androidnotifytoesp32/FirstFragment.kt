@@ -19,6 +19,7 @@ import androidx.core.content.ContextCompat
 import androidx.core.widget.addTextChangedListener
 import androidx.lifecycle.lifecycleScope
 import com.kusa.androidnotifytoesp32.databinding.FragmentFirstBinding
+import android.widget.Toast
 import kotlinx.coroutines.launch
 
 /**
@@ -77,6 +78,16 @@ class FirstFragment : Fragment() {
         binding.buttonSettings.setOnClickListener {
             val intent = Intent(Settings.ACTION_NOTIFICATION_LISTENER_SETTINGS)
             startActivity(intent)
+        }
+
+        binding.buttonTestSend.setOnClickListener {
+            val service = ESP32NotificationListenerService.instance
+            if (service == null) {
+                Toast.makeText(requireContext(), "Service not running. Check notification permission.", Toast.LENGTH_SHORT).show()
+                return@setOnClickListener
+            }
+            service.sendTestNotification("Test", "This is a test message from AndroidNotifytoESP32")
+            Toast.makeText(requireContext(), "Test send triggered!", Toast.LENGTH_SHORT).show()
         }
 
         checkBluetoothPermissions()

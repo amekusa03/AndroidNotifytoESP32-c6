@@ -51,13 +51,81 @@ static void on_state_mismatch(bool actual_on)
     s_syncing_attribute = false;
 }
 
-#define GPIO_BOOT_BUTTON      GPIO_NUM_9
-#define SHORT_PRESS_MIN_MS    50
-#define FACTORY_RESET_HOLD_MS 3000
+#define GPIO_BOOT_BUTTON        GPIO_NUM_9
+#define GPIO_EMERGENCY_STOP     GPIO_NUM_8  // B-contact (NC): normally LOW, HIGH on activation
+#define SHORT_PRESS_MIN_MS      50
+#define FACTORY_RESET_HOLD_MS   3000
+// Debounce interval for emergency stop
+#define EMERGENCY_STOP_DEBOUNCE_MS  50
 
 // Guard against unintended trigger during Matter ZCL initialization callback at startup.
 // Becomes true once Wi-Fi connects and monitor initialization completes.
 static volatile bool s_system_ready = false;
+
+static void send_emergency_token_async(const char *token, const char *task_name)
+{
+    xTaskCreate([](void *arg) {
+        const char *tok = (const char *)arg;
+        esp_err_t err = shutdown_client_send_token(tok);
+        if (err == ESP_OK) {
+            ESP_LOGI("emrg_client", "Emergency token '%s' sent successfully", tok);
+        } else {
+            ESP_LOGE("emrg_client", "Failed to send emergency token '%s': 0x%x", tok, err);
+        }
+        vTaskDelete(NULL);
+    }, task_name, 4096, (void *)token, 5, nullptr);
+}
+
+// --------------------------------------------------------------------------
+// Emergency Stop Task (GPIO 8, B-contact / Normally-Closed)
+// B接点配線: 通常時 LOW、非常停止ボタン押下で回路開放 -> HIGH
+// - 押下 (LOW -> HIGH): PC_CONTROL_TOKEN_EMERGENCY_STOP を送信 & LCD "EMRG STOP!"
+// - 解除 (HIGH -> LOW): PC_CONTROL_TOKEN_EMERGENCY_RELEASE を送信 & LCD "EMRG Released"
+// --------------------------------------------------------------------------
+static void emergency_stop_task(void *)
+{
+    gpio_config_t cfg = {
+        .pin_bit_mask = (1ULL << GPIO_EMERGENCY_STOP),
+        .mode         = GPIO_MODE_INPUT,
+        .pull_up_en   = GPIO_PULLUP_ENABLE,     // B接点開放（押下/断線）時に HIGH に引っ張る
+        .pull_down_en = GPIO_PULLDOWN_DISABLE,
+        .intr_type    = GPIO_INTR_DISABLE,
+    };
+    gpio_config(&cfg);
+    ESP_LOGI(TAG, "Emergency stop monitor started (GPIO %d)", GPIO_EMERGENCY_STOP);
+
+    bool current_state = (gpio_get_level((gpio_num_t)GPIO_EMERGENCY_STOP) == 1);
+    int  stable_count  = 0;
+    const int DEBOUNCE_SAMPLES = 2; // 2 * 50ms = 100ms stable threshold
+
+    while (true) {
+        bool raw_level = (gpio_get_level((gpio_num_t)GPIO_EMERGENCY_STOP) == 1);
+
+        if (raw_level != current_state) {
+            stable_count++;
+            if (stable_count >= DEBOUNCE_SAMPLES) {
+                current_state = raw_level;
+                stable_count = 0;
+
+                if (current_state) {
+                    // Rising edge: B接点開放（非常停止ボタン押下）
+                    ESP_LOGW(TAG, "Emergency stop ACTIVATED (GPIO %d HIGH)", GPIO_EMERGENCY_STOP);
+                    lcd_display_set_message("EMRG STOP!");
+                    send_emergency_token_async(PC_CONTROL_TOKEN_EMERGENCY_STOP, "emrg_stop_tx");
+                } else {
+                    // Falling edge: B接点復帰（非常停止ボタン解除）
+                    ESP_LOGI(TAG, "Emergency stop RELEASED (GPIO %d LOW)", GPIO_EMERGENCY_STOP);
+                    lcd_display_set_message("EMRG Released");
+                    send_emergency_token_async(PC_CONTROL_TOKEN_EMERGENCY_RELEASE, "emrg_rel_tx");
+                }
+            }
+        } else {
+            stable_count = 0;
+        }
+
+        vTaskDelay(pdMS_TO_TICKS(EMERGENCY_STOP_DEBOUNCE_MS));
+    }
+}
 
 static void button_task(void *)
 {
@@ -305,5 +373,6 @@ extern "C" void app_main()
     pc_monitor_init(on_state_mismatch, on_pc_state_change);
     notify_server_init();
 
-    xTaskCreate(button_task, "button_task", 4096, nullptr, 1, nullptr);
+    xTaskCreate(button_task,        "button_task",   4096, nullptr, 1, nullptr);
+    xTaskCreate(emergency_stop_task, "emrg_stop_mon", 4096, nullptr, 2, nullptr);
 }

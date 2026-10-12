@@ -26,10 +26,46 @@ import kotlin.concurrent.thread
 
 class ESP32NotificationListenerService : NotificationListenerService() {
 
+    companion object {
+        var instance: ESP32NotificationListenerService? = null
+            private set
+    }
+
     private val TAG = "ESP32Notify"
     private val WIDTH = 240
     private val HEIGHT = 135
     private val SPP_UUID: UUID = UUID.fromString("00001101-0000-1000-8000-00805f9b34fb")
+
+    override fun onCreate() {
+        super.onCreate()
+        instance = this
+    }
+
+    override fun onDestroy() {
+        super.onDestroy()
+        instance = null
+    }
+
+    fun sendTestNotification(title: String, text: String) {
+        val bitmap = createNotificationBitmap(title, text)
+        val rgb565Data = convertToRGB565(bitmap)
+        val prefs = getSharedPreferences("Settings", Context.MODE_PRIVATE)
+        val duration = prefs.getInt("display_duration", 10).coerceIn(0, 300)
+        val header = byteArrayOf(
+            'N'.code.toByte(),
+            'T'.code.toByte(),
+            (duration shr 8).toByte(),
+            (duration and 0xFF).toByte()
+        )
+        val payload = header + rgb565Data
+        val mode = prefs.getString("mode", "TCP")
+        if (mode == "BT") {
+            sendToESP32Bluetooth(payload)
+        } else {
+            val ip = prefs.getString("esp32_ip", "esp32-notify.local") ?: "esp32-notify.local"
+            sendToESP32Tcp(payload, ip)
+        }
+    }
 
     override fun onNotificationPosted(sbn: StatusBarNotification) {
         val packageName = sbn.packageName
@@ -38,6 +74,11 @@ class ESP32NotificationListenerService : NotificationListenerService() {
         val extras = sbn.notification.extras
         val title = extras.getString(Notification.EXTRA_TITLE) ?: ""
         val text = extras.getCharSequence(Notification.EXTRA_TEXT)?.toString() ?: ""
+
+        if (title.isBlank() && text.isBlank()) {
+            Log.d(TAG, "Notification skipped: title and text are both blank")
+            return
+        }
 
         Log.d(TAG, "Notification received: [$title] $text")
 

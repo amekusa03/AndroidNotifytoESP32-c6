@@ -28,6 +28,7 @@ static const char *TAG = "lcd_display";
 #define LCD_PIN_RST  4
 #define LCD_PIN_CS   5
 #define LCD_PIN_BL   6
+#define GPIO_NOTIFY_LED 7   // HIGH while notification image is displayed
 
 // Color macro (RGB888 -> Byte-swapped RGB565 for SPI ST7789)
 #define RGB565(r, g, b) (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
@@ -256,6 +257,9 @@ static void notify_timer_cb(TimerHandle_t xTimer) {
     xSemaphoreTake(s_lcd_mutex, portMAX_DELAY);
     if (s_notification_active) {
         s_notification_active = false;
+        gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
+        gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 0);
+        gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
         ESP_LOGI(TAG, "Notification timed out, restoring status screen");
         if (s_restore_backlight_off_after_notify) {
             s_restore_backlight_off_after_notify = false;
@@ -449,6 +453,14 @@ esp_err_t lcd_display_init(void) {
     gpio_set_level((gpio_num_t)LCD_PIN_BL, 1);
     gpio_hold_en((gpio_num_t)LCD_PIN_BL);
 
+    // 5. Notify LED (GPIO 7) - LOW until notification is active
+    gpio_config_t notify_led_cfg = {};
+    notify_led_cfg.mode         = GPIO_MODE_OUTPUT;
+    notify_led_cfg.pin_bit_mask = 1ULL << GPIO_NOTIFY_LED;
+    gpio_config(&notify_led_cfg);
+    gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 0);
+    gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);  // Hold LOW during Light Sleep to prevent leakage
+
     // Create notification auto-dismiss timer
     s_notify_timer = xTimerCreate("notify_tmr", pdMS_TO_TICKS(NOTIFY_DISPLAY_TIMEOUT_MS), pdFALSE, NULL, notify_timer_cb);
 
@@ -541,6 +553,9 @@ bool lcd_display_toggle_backlight(void) {
     if (s_notification_active) {
         // Dismiss notification immediately on button press
         s_notification_active = false;
+        gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
+        gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 0);
+        gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
         if (s_notify_timer) {
             xTimerStop(s_notify_timer, 0);
         }
@@ -586,6 +601,9 @@ void lcd_display_show_notification(const uint8_t *raw_rgb565, uint32_t duration_
     esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, s_fb);
 
     s_notification_active = true;
+    gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
+    gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 1);
+    gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
 
     // (Re)start notification auto-dismiss timer
     if (s_notify_timer) {
