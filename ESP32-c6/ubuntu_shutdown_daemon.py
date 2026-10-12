@@ -12,6 +12,38 @@ TOKEN_EMERGENCY_STOP    = "secure_pc_emergency_stop_token_12345"
 TOKEN_EMERGENCY_RELEASE = "secure_pc_emergency_release_token_12345"
 # --------------
 
+def lock_screen():
+    """Lock all active user sessions / screen."""
+    print("🔒 Locking screen...")
+    try:
+        subprocess.Popen(["loginctl", "lock-sessions"])
+    except Exception as e:
+        print(f"Error calling loginctl lock-sessions: {e}")
+    try:
+        res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], capture_output=True, text=True)
+        for line in res.stdout.strip().splitlines():
+            parts = line.split()
+            if parts:
+                subprocess.Popen(["loginctl", "lock-session", parts[0]])
+    except Exception:
+        pass
+
+def unlock_screen():
+    """Unlock all active user sessions / screen."""
+    print("🔓 Unlocking screen...")
+    try:
+        subprocess.Popen(["loginctl", "unlock-sessions"])
+    except Exception as e:
+        print(f"Error calling loginctl unlock-sessions: {e}")
+    try:
+        res = subprocess.run(["loginctl", "list-sessions", "--no-legend"], capture_output=True, text=True)
+        for line in res.stdout.strip().splitlines():
+            parts = line.split()
+            if parts:
+                subprocess.Popen(["loginctl", "unlock-session", parts[0]])
+    except Exception:
+        pass
+
 def handle_command(token):
     token = token.strip()
     
@@ -21,22 +53,22 @@ def handle_command(token):
         return "ACK: Shutting down\n", True
 
     elif token == TOKEN_EMERGENCY_STOP:
-        print("⚠️ EMERGENCY STOP token received!")
-        # 必要に応じて非常停止時の処理（プロセス停止、アラート通知など）を記述
+        print("⚠️ EMERGENCY STOP token received! Locking screen...")
         try:
-            subprocess.Popen(["notify-send", "-u", "critical", "EMERGENCY STOP", "Emergency stop button pressed!"])
+            subprocess.Popen(["notify-send", "-u", "critical", "EMERGENCY STOP", "Emergency stop button pressed! Screen locked."])
         except Exception:
             pass
-        return "ACK: Emergency stop received\n", False
+        lock_screen()
+        return "ACK: Emergency stop received (screen locked)\n", False
 
     elif token == TOKEN_EMERGENCY_RELEASE:
-        print("✅ EMERGENCY RELEASE token received.")
-        # 非常停止解除時の処理を記述
+        print("✅ EMERGENCY RELEASE token received. Unlocking screen...")
+        unlock_screen()
         try:
-            subprocess.Popen(["notify-send", "-u", "normal", "EMERGENCY RELEASE", "Emergency stop released."])
+            subprocess.Popen(["notify-send", "-u", "normal", "EMERGENCY RELEASE", "Emergency stop released. Screen unlocked."])
         except Exception:
             pass
-        return "ACK: Emergency release received\n", False
+        return "ACK: Emergency release received (screen unlocked)\n", False
 
     else:
         print(f"Invalid token received: '{token}'")

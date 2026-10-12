@@ -168,10 +168,10 @@ idf.py -p /dev/ttyACM0 flash monitor
    - **配線**: `GPIO 8` ─── [B接点 (NC) 非常停止SW] ─── `GND`
    - **通常時 (非押下)**: GND と導通しているため、GPIO 8 = LOW。
    - **押下時 (停止作動)**: スイッチが開放され内部プルアップにより GPIO 8 = HIGH（立ち上がりエッジ検出）。
-     - ESP32-C6 が `PC_CONTROL_TOKEN_EMERGENCY_STOP` を PC 宛 TCP で非同期送信。
+     - ESP32-C6 が `PC_CONTROL_TOKEN_EMERGENCY_STOP` を PC 宛 TCP で非同期送信（Ubuntu PC の画面を即座にロック）。
      - LCD に `EMRG STOP!` を表示。
    - **解除時 (復帰作動)**: ボタン解除で GND と再導通し GPIO 8 = LOW（立ち下がりエッジ検出）。
-     - ESP32-C6 が `PC_CONTROL_TOKEN_EMERGENCY_RELEASE` を PC 宛 TCP で非同期送信。
+     - ESP32-C6 が `PC_CONTROL_TOKEN_EMERGENCY_RELEASE` を PC 宛 TCP で非同期送信（Ubuntu PC の画面ロックを解除）。
      - LCD に `EMRG Released` を表示。
    - 100ms の安定検出（デバウンス処理）により、スイッチのチャタリング誤動作を抑止。
    - ※ フェールセーフ設計: ケーブル抜けや断線時も回路が開放されて HIGH となり、安全に非常停止が作動します。
@@ -180,7 +180,7 @@ idf.py -p /dev/ttyACM0 flash monitor
 
 ## 🐧 Ubuntu 側の常駐プログラム（デーモン）設定
 
-ESP32 からの要求（TCP トークン）を待ち受け、PC のシャットダウンや非常停止イベント（停止・解除）の受信を行うための常駐デーモンを systemd を使用して設定します。
+ESP32 からの要求（TCP トークン）を待ち受け、PC のシャットダウンや非常停止イベント（画面ロック・ロック解除）の受信・制御を行うための常駐デーモンを systemd を使用して設定します。
 
 ### 1. デーモンスクリプトの確認・パーミッション設定
 
