@@ -10,6 +10,7 @@
 #include <esp_log.h>
 #include <esp_heap_caps.h>
 #include <driver/gpio.h>
+#include <driver/ledc.h>
 #include <driver/spi_master.h>
 #include <esp_lcd_panel_io.h>
 #include <esp_lcd_panel_vendor.h>
@@ -28,7 +29,17 @@ static const char *TAG = "lcd_display";
 #define LCD_PIN_RST  4
 #define LCD_PIN_CS   5
 #define LCD_PIN_BL   6
-#define GPIO_NOTIFY_LED 7   // HIGH while notification image is displayed
+#define GPIO_NOTIFY_LED 7   // Notification LED (PWM Fade Control)
+
+// Notification LED PWM (LEDC) Configuration
+#define NOTIFY_LED_MODE             LEDC_LOW_SPEED_MODE
+#define NOTIFY_LED_CHANNEL          LEDC_CHANNEL_0
+#define NOTIFY_LED_TIMER            LEDC_TIMER_0
+#define NOTIFY_LED_DUTY_RES         LEDC_TIMER_10_BIT  // 10-bit: 0 - 1023
+#define NOTIFY_LED_MAX_DUTY         1023
+#define NOTIFY_LED_FREQ_HZ          5000               // 5 kHz PWM frequency
+#define NOTIFY_LED_FADE_IN_MS       600                // 600ms fade-in
+#define NOTIFY_LED_FADE_OUT_MS      600                // 600ms fade-out
 
 // Color macro (RGB888 -> Byte-swapped RGB565 for SPI ST7789)
 #define RGB565(r, g, b) (uint16_t)((((r) & 0xF8) << 8) | (((g) & 0xFC) << 3) | ((b) >> 3))
@@ -69,6 +80,7 @@ static bool s_colon_visible = true;
 // Notification Display State
 static void render_screen(void);
 static TimerHandle_t s_notify_timer = NULL;
+static TimerHandle_t s_fade_off_timer = NULL;
 static bool s_notification_active = false;
 static bool s_restore_backlight_off_after_notify = false;
 
@@ -252,19 +264,67 @@ static void set_display_power_state(bool enable) {
              enable ? "ON" : "OFF", enable ? "Active" : "Sleep");
 }
 
+static void fade_off_timer_cb(TimerHandle_t xTimer) {
+    if (!s_lcd_mutex) return;
+    xSemaphoreTake(s_lcd_mutex, portMAX_DELAY);
+    gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
+    if (s_restore_backlight_off_after_notify) {
+        s_restore_backlight_off_after_notify = false;
+        set_display_power_state(false);
+    }
+    xSemaphoreGive(s_lcd_mutex);
+}
+
+static void notify_led_init(void) {
+    ledc_timer_config_t timer_cfg = {};
+    timer_cfg.speed_mode       = NOTIFY_LED_MODE;
+    timer_cfg.duty_resolution  = NOTIFY_LED_DUTY_RES;
+    timer_cfg.timer_num        = NOTIFY_LED_TIMER;
+    timer_cfg.freq_hz          = NOTIFY_LED_FREQ_HZ;
+    timer_cfg.clk_cfg          = LEDC_AUTO_CLK;
+    ledc_timer_config(&timer_cfg);
+
+    ledc_channel_config_t ch_cfg = {};
+    ch_cfg.gpio_num       = GPIO_NOTIFY_LED;
+    ch_cfg.speed_mode     = NOTIFY_LED_MODE;
+    ch_cfg.channel        = NOTIFY_LED_CHANNEL;
+    ch_cfg.intr_type      = LEDC_INTR_DISABLE;
+    ch_cfg.timer_sel      = NOTIFY_LED_TIMER;
+    ch_cfg.duty           = 0;
+    ch_cfg.hpoint         = 0;
+    ledc_channel_config(&ch_cfg);
+
+    ledc_fade_func_install(0);
+    gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
+}
+
+static void notify_led_fade_in(void) {
+    if (s_fade_off_timer) {
+        xTimerStop(s_fade_off_timer, 0);
+    }
+    gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
+    ledc_set_fade_with_time(NOTIFY_LED_MODE, NOTIFY_LED_CHANNEL, NOTIFY_LED_MAX_DUTY, NOTIFY_LED_FADE_IN_MS);
+    ledc_fade_start(NOTIFY_LED_MODE, NOTIFY_LED_CHANNEL, LEDC_FADE_NO_WAIT);
+}
+
+static void notify_led_fade_out(uint32_t fade_ms) {
+    gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
+    ledc_set_fade_with_time(NOTIFY_LED_MODE, NOTIFY_LED_CHANNEL, 0, fade_ms);
+    ledc_fade_start(NOTIFY_LED_MODE, NOTIFY_LED_CHANNEL, LEDC_FADE_NO_WAIT);
+    if (s_fade_off_timer) {
+        xTimerChangePeriod(s_fade_off_timer, pdMS_TO_TICKS(fade_ms), 0);
+        xTimerStart(s_fade_off_timer, 0);
+    }
+}
+
 static void notify_timer_cb(TimerHandle_t xTimer) {
     if (!s_lcd_mutex) return;
     xSemaphoreTake(s_lcd_mutex, portMAX_DELAY);
     if (s_notification_active) {
         s_notification_active = false;
-        gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
-        gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 0);
-        gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
-        ESP_LOGI(TAG, "Notification timed out, restoring status screen");
-        if (s_restore_backlight_off_after_notify) {
-            s_restore_backlight_off_after_notify = false;
-            set_display_power_state(false);
-        } else {
+        notify_led_fade_out(NOTIFY_LED_FADE_OUT_MS);
+        ESP_LOGI(TAG, "Notification timed out, fading out LED & restoring screen");
+        if (!s_restore_backlight_off_after_notify) {
             render_screen();
         }
     }
@@ -453,16 +513,12 @@ esp_err_t lcd_display_init(void) {
     gpio_set_level((gpio_num_t)LCD_PIN_BL, 1);
     gpio_hold_en((gpio_num_t)LCD_PIN_BL);
 
-    // 5. Notify LED (GPIO 7) - LOW until notification is active
-    gpio_config_t notify_led_cfg = {};
-    notify_led_cfg.mode         = GPIO_MODE_OUTPUT;
-    notify_led_cfg.pin_bit_mask = 1ULL << GPIO_NOTIFY_LED;
-    gpio_config(&notify_led_cfg);
-    gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 0);
-    gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);  // Hold LOW during Light Sleep to prevent leakage
+    // 5. Notify LED (GPIO 7) - PWM fade control
+    notify_led_init();
 
-    // Create notification auto-dismiss timer
+    // Create notification auto-dismiss timer & fade off timer
     s_notify_timer = xTimerCreate("notify_tmr", pdMS_TO_TICKS(NOTIFY_DISPLAY_TIMEOUT_MS), pdFALSE, NULL, notify_timer_cb);
+    s_fade_off_timer = xTimerCreate("fade_off_tmr", pdMS_TO_TICKS(NOTIFY_LED_FADE_OUT_MS), pdFALSE, NULL, fade_off_timer_cb);
 
     // Render Initial Splash Screen
     xSemaphoreTake(s_lcd_mutex, portMAX_DELAY);
@@ -553,16 +609,11 @@ bool lcd_display_toggle_backlight(void) {
     if (s_notification_active) {
         // Dismiss notification immediately on button press
         s_notification_active = false;
-        gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
-        gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 0);
-        gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
+        notify_led_fade_out(250); // Fast fade out on manual dismiss
         if (s_notify_timer) {
             xTimerStop(s_notify_timer, 0);
         }
-        if (s_restore_backlight_off_after_notify) {
-            s_restore_backlight_off_after_notify = false;
-            set_display_power_state(false);
-        } else {
+        if (!s_restore_backlight_off_after_notify) {
             render_screen();
         }
         xSemaphoreGive(s_lcd_mutex);
@@ -601,9 +652,7 @@ void lcd_display_show_notification(const uint8_t *raw_rgb565, uint32_t duration_
     esp_lcd_panel_draw_bitmap(s_panel_handle, 0, 0, LCD_H_RES, LCD_V_RES, s_fb);
 
     s_notification_active = true;
-    gpio_hold_dis((gpio_num_t)GPIO_NOTIFY_LED);
-    gpio_set_level((gpio_num_t)GPIO_NOTIFY_LED, 1);
-    gpio_hold_en((gpio_num_t)GPIO_NOTIFY_LED);
+    notify_led_fade_in();
 
     // (Re)start notification auto-dismiss timer
     if (s_notify_timer) {
