@@ -11,15 +11,14 @@ echo "Shutdown & PC Control daemon (netcat-based) listening on port $PORT..."
 
 while true; do
     # Receive client data using nc with a 5 second timeout
-    # standard openbsd netcat uses '-l' with host/port parameters
     REQUEST=$(timeout 5 nc -l -p $PORT)
     
     # Strip any whitespace/newlines
-    CLEAN_REQUEST=$(echo "$REQUEST" | tr -d '\r\n[:space:]')
+    CLEAN_REQUEST=$(echo "$REQUEST" | tr -d "\r\n[:space:]")
     
     if [ "$CLEAN_REQUEST" = "$TOKEN_SHUTDOWN" ]; then
-        echo "Valid shutdown token received! Executing shutdown..."
-        sudo shutdown -h now
+        echo "Valid shutdown token received! Executing systemctl poweroff..."
+        systemctl poweroff -i
         exit 0
     elif [ "$CLEAN_REQUEST" = "$TOKEN_EMERGENCY_STOP" ]; then
         echo "⚠️ EMERGENCY STOP token received! Locking screen..."

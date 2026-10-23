@@ -36,7 +36,7 @@ static const char *TAG = "lcd_display";
 #define NOTIFY_LED_CHANNEL          LEDC_CHANNEL_0
 #define NOTIFY_LED_TIMER            LEDC_TIMER_0
 #define NOTIFY_LED_DUTY_RES         LEDC_TIMER_10_BIT  // 10-bit: 0 - 1023
-#define NOTIFY_LED_MAX_DUTY         1023
+#define NOTIFY_LED_MAX_DUTY         100                // ~20% brightness (10-bit: 0 - 1023)
 #define NOTIFY_LED_FREQ_HZ          5000               // 5 kHz PWM frequency
 #define NOTIFY_LED_FADE_IN_MS       600                // 600ms fade-in
 #define NOTIFY_LED_FADE_OUT_MS      600                // 600ms fade-out

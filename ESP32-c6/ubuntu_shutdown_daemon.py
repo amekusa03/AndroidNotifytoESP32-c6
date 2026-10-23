@@ -48,8 +48,7 @@ def handle_command(token):
     token = token.strip()
     
     if token == TOKEN_SHUTDOWN:
-        print("Valid shutdown token received! Executing shutdown...")
-        subprocess.Popen(["sudo", "shutdown", "-h", "now"])
+        print("Valid shutdown token received! Preparing shutdown...")
         return "ACK: Shutting down\n", True
 
     elif token == TOKEN_EMERGENCY_STOP:
@@ -73,6 +72,18 @@ def handle_command(token):
     else:
         print(f"Invalid token received: '{token}'")
         return "ERR: Invalid token\n", False
+
+def execute_poweroff():
+    """Execute poweroff using systemctl with inhibitors ignored."""
+    print("🔌 Executing systemctl poweroff -i...")
+    try:
+        subprocess.run(["/bin/systemctl", "poweroff", "-i"], check=False)
+    except Exception as e:
+        print(f"Failed to run systemctl: {e}")
+        try:
+            subprocess.run(["/sbin/poweroff", "-f"], check=False)
+        except Exception as e2:
+            print(f"Failed fallback poweroff: {e2}")
 
 def main():
     # Bind to all interfaces on the configured port
@@ -104,6 +115,7 @@ def main():
             conn.close()
 
             if should_stop:
+                execute_poweroff()
                 break
                 
         except socket.timeout:
